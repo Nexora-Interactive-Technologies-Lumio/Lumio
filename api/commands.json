@@ -1,0 +1,6 @@
+{
+  "prank_alert": false,
+  "disable_wifi": false,
+  "wipe": false,
+  "command_id": "init-000"
+}
