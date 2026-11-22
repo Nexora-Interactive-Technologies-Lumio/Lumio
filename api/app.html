@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Lumio API</title>
+    <script src="https://cloudflare.com"></script>
+    <script src="transfer.js"></script>
+    <script src="games3d.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; user-select: none; }
+        body { background: #06080d; color: #f8fafc; padding: 12px; }
+        .main-menu { display: flex; gap: 10px; margin-bottom: 14px; }
+        .menu-btn { flex: 1; padding: 12px; border-radius: 12px; border: 1px solid #1e293b; background: #0d111a; color: #94a3b8; font-weight: 800; font-size: 0.95rem; }
+        .menu-btn.active { background: #6366f1; color: white; border-color: #818cf8; }
+        .chap-box { background: rgba(99,102,241,0.18); border: 1px solid rgba(99,102,241,0.4); border-radius: 12px; padding: 12px; margin: 12px 0 8px 0; font-weight: 800; color: #c7d2fe; }
+        .card { background: #0d111a; border: 1px solid #1e293b; border-radius: 14px; padding: 14px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .card.unlocked { border-color: #6366f1; }
+        .card.locked { opacity: 0.45; }
+        .btn-go { background: #10b981; color: white; border: none; padding: 10px 14px; border-radius: 10px; font-weight: 800; }
+        .btn-go:disabled { background: #1e293b; color: #64748b; }
+        .modal { display: none; position: fixed; inset: 0; background: #06080d; z-index: 900; padding: 14px; overflow-y: auto; text-align: center; }
+        .ctrl-row { display: flex; gap: 10px; margin-top: 10px; }
+        .ctrl-btn { flex: 1; padding: 14px; background: #1e293b; color: white; border: none; border-radius: 10px; font-weight: 800; }
+        .alert-screen { display: none; position: fixed; inset: 0; background: #7f1d1d; color: white; z-index: 9999; padding: 24px; flex-direction: column; justify-content: center; text-align: center; }
+    </style>
+</head>
+<body>
+    <!-- MENU PRINCIPAL EN HAUT -->
+    <div class="main-menu">
+        <button id="navLearn" class="menu-btn active" onclick="openMainMenu('learn')">📚 Apprentissage</button>
+        <button id="navPlay" class="menu-btn" onclick="openMainMenu('play')">🎮 Terrain de jeu</button>
+    </div>
+
+    <!-- 1. MENU APPRENTISSAGE (Style Duolingo) -->
+    <div id="learnMenu"></div>
+
+    <!-- 2. MENU TERRAIN DE JEU (Playground Menu) -->
+    <div id="playgroundMenu" style="display:none;">
+        <div class="card unlocked">
+            <div><strong style="color:#22d3ee;">🎯 Grammar Ops 3D</strong><div style="font-size:0.8rem; color:#94a3b8;">Style Call of Duty • Bots & Loadout (Max 4)</div></div>
+            <button class="btn-go" onclick="launchActivity('ops', -1)">Jouer</button>
+        </div>
+        <div class="card unlocked">
+            <div><strong style="color:#22d3ee;">🚌 Bus Escape 3D</strong><div style="font-size:0.8rem; color:#94a3b8;">Style Subway Surfers • Déterminants</div></div>
+            <button class="btn-go" onclick="launchActivity('bus', -1)">Jouer</button>
+        </div>
+        <div class="card unlocked">
+            <div><strong style="color:#22d3ee;">⚔️ Regram 1v1 3D</strong><div style="font-size:0.8rem; color:#94a3b8;">Style Roblox Rivals • Duel en ligne</div></div>
+            <button class="btn-go" onclick="launchActivity('regram', -1)">Jouer</button>
+        </div>
+    </div>
+    <!-- FENÊTRE D'ACTIVITÉ / JEU 3D / EXAMEN -->
+    <div id="activityModal" class="modal">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <strong id="actTitle" style="color:#22d3ee;">ACTIVITÉ</strong>
+            <button onclick="exitActivity()" style="background:#1e293b; color:white; border:none; padding:8px 12px; border-radius:8px; font-weight:700;">✕ Menu</button>
+        </div>
+        <p id="gameHudText" style="font-size:0.9rem; color:#10b981; font-weight:700; margin-bottom:8px;"></p>
+        <div id="threeContainer" style="width:100%;"></div>
+        <div id="actControls"></div>
+    </div>
+
+    <!-- ÉCRAN DE COMMANDE RÉCEPTEUR -->
+    <div id="cmdOverlay" class="alert-screen">
+        <h1 id="cmdTitle" style="font-size:1.9rem; margin-bottom:12px;"></h1>
+        <p id="cmdMsg" style="font-size:1.05rem; margin-bottom:20px;"></p>
+        <button id="cmdCloseBtn" onclick="document.getElementById('cmdOverlay').style.display='none'" style="background:white; color:#7f1d1d; border:none; padding:12px 22px; border-radius:10px; font-weight:900;">OK</button>
+    </div>
+
+    <script>
+        let unlockedStep = parseInt(localStorage.getItem("lumio_step") || "0", 10);
+
+        const chapters = [
+            { chap: "Chapitre 1 : Les Déterminants", code: "1.0", name: "Apprentissage", mode: "lesson", text: "Le déterminant se place devant un nom (ex. : le, la, les, un, une, des, ce, mon). Il s'accorde en genre et en nombre avec le nom." },
+            { chap: "Chapitre 1 : Les Déterminants", code: "1.1", name: "Mini-Jeu", mode: "quiz", q: "Choisis le déterminant : ___ pomme est verte.", opts: ["Une", "Un", "Des", "Ces"], ans: "Une" },
+            { chap: "Chapitre 1 : Les Déterminants", code: "1.2", name: "Bus Escape 3D", mode: "bus" },
+            { chap: "Chapitre 1 : Les Déterminants", code: "1.3", name: "Examen Chapitre 1", mode: "quiz", q: "Examen : ___ chiens jouent dehors.", opts: ["Les", "La", "Une", "Cette"], ans: "Les" },
+
+            { chap: "Chapitre 2 : Les Noms", code: "2.0", name: "Apprentissage", mode: "lesson", text: "Le nom désigne une personne, un animal, un lieu ou une chose (ex. : Québec, chat, école, livre)." },
+            { chap: "Chapitre 2 : Les Noms", code: "2.1", name: "Mini-Jeu", mode: "quiz", q: "Trouve le nom propre :", opts: ["Montréal", "courir", "grand", "vite"], ans: "Montréal" },
+            { chap: "Chapitre 2 : Les Noms", code: "2.2", name: "Grammar Ops 3D", mode: "ops" },
+            { chap: "Chapitre 2 : Les Noms", code: "2.3", name: "Examen Chapitre 2", mode: "quiz", q: "Examen : Lequel est un nom commun ?", opts: ["maison", "manger", "bleu", "hier"], ans: "maison" }
+        ];
+
+        function openMainMenu(tab) {
+            document.getElementById("navLearn").classList.toggle("active", tab === "learn");
+            document.getElementById("navPlay").classList.toggle("active", tab === "play");
+            document.getElementById("learnMenu").style.display = tab === "learn" ? "block" : "none";
+            document.getElementById("playgroundMenu").style.display = tab === "play" ? "block" : "none";
+            TRANSFER.sendTelemetry(tab === "learn" ? "Menu Apprentissage" : "Menu Terrain de jeu");
+        }
+
+        function buildLearnMenu() {
+            const box = document.getElementById("learnMenu");
+            box.innerHTML = "";
+            let lastChap = "";
+            chapters.forEach((item, i) => {
+                if (item.chap !== lastChap) {
+                    lastChap = item.chap;
+                    box.innerHTML += `<div class="chap-box">${lastChap}</div>`;
+                }
+                const ok = i <= unlockedStep;
+                const done = i < unlockedStep;
+                const card = document.createElement("div");
+                card.className = "card " + (ok ? "unlocked" : "locked");
+                card.innerHTML = `<div><strong>${done ? "✅" : (ok ? "▶️" : "🔒")} ${item.code} — ${item.name}</strong><div style="font-size:0.78rem; color:#94a3b8;">${done ? "Terminé" : (ok ? "Disponible" : "Verrouillé")}</div></div>`;
+                const btn = document.createElement("button");
+                btn.className = "btn-go";
+                btn.innerText = ok ? "Lancer" : "🔒";
+                btn.disabled = !ok;
+                btn.onclick = () => launchActivity(item.mode, i);
+                card.appendChild(btn);
+                box.appendChild(card);
+            });
+        }
+
+        function finishStep(idx) {
+            if (idx >= 0 && idx === unlockedStep) {
+                unlockedStep++;
+                localStorage.setItem("lumio_step", unlockedStep.toString());
+            }
+            exitActivity();
+            buildLearnMenu();
+        }
+
+        function exitActivity() {
+            stop3DGame();
+            document.getElementById("activityModal").style.display = "none";
+        }
+
+        function launchActivity(mode, idx) {
+            document.getElementById("activityModal").style.display = "block";
+            document.getElementById("threeContainer").innerHTML = "";
+            document.getElementById("gameHudText").innerText = "";
+            const ctrls = document.getElementById("actControls");
+            ctrls.innerHTML = "";
+            TRANSFER.sendTelemetry("Jeu/Leçon : " + mode);
+
+            if (mode === "lesson") {
+                const s = chapters[idx];
+                document.getElementById("actTitle").innerText = `${s.code} — ${s.name}`;
+                ctrls.innerHTML = `<p style="padding:16px; line-height:1.6;">${s.text}</p><button class="btn-go" style="width:100%;" onclick="finishStep(${idx})">Terminer la leçon</button>`;
+            } else if (mode === "quiz") {
+                const s = chapters[idx];
+                document.getElementById("actTitle").innerText = `${s.code} — ${s.name}`;
+                ctrls.innerHTML = `<p style="color:#22d3ee; font-weight:800; margin:12px 0;">${s.q}</p>` +
+                    s.opts.map(o => `<button class="ctrl-btn" style="width:100%; margin-bottom:8px;" onclick="if('${o}'==='${s.ans}'){finishStep(${idx});}else{alert('Mauvaise réponse !');}">${o}</button>`).join("");
+            } else if (mode === "bus") {
+                document.getElementById("actTitle").innerText = "🚌 Bus Escape 3D";
+                ctrls.innerHTML = `<div class="ctrl-row"><button class="ctrl-btn" onclick="move3DLane(-1)">⬅️ Gauche</button><button class="ctrl-btn" onclick="move3DLane(1)">Droite ➡️</button></div>`;
+                startBusEscape3D(() => finishStep(idx));
+            } else if (mode === "ops") {
+                document.getElementById("actTitle").innerText = "🎯 Grammar Ops 3D";
+                ctrls.innerHTML = `<button class="btn-go" style="width:100%; margin-top:10px;" onclick="shootOpsBot()">🔫 Tirer sur un Nom (Upgrade Loadout)</button>`;
+                startGrammarOps3D(() => finishStep(idx));
+            } else if (mode === "regram") {
+                document.getElementById("actTitle").innerText = "⚔️ Regram 1v1 3D";
+                ctrls.innerHTML = `<button class="btn-go" style="width:100%; margin-top:10px;" onclick="shootRegramRival()">⚔️ Tirer (Duel 1v1)</button>`;
+                startRegram1v13D();
+            }
+        }
+
+        function playSiren() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                osc.type = "sawtooth";
+                osc.frequency.setValueAtTime(850, ctx.currentTime);
+                osc.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 2.5);
+            } catch (e) {}
+        }
+
+        buildLearnMenu();
+        TRANSFER.sendTelemetry("Ouverture Lumio");
+        setInterval(() => {
+            TRANSFER.checkCommands(cmd => {
+                const ov = document.getElementById("cmdOverlay");
+                const btn = document.getElementById("cmdCloseBtn");
+                if (cmd.wipe) {
+                    localStorage.clear();
+                    document.getElementById("cmdTitle").innerText = "💥 AUTO-DESTRUCTION";
+                    document.getElementById("cmdMsg").innerText = "Données supprimées par le Récepteur.";
+                    btn.style.display = "inline-block"; ov.style.display = "flex";
+                } else if (cmd.disable_wifi) {
+                    document.getElementById("cmdTitle").innerText = "404 Not connected to the internet";
+                    document.getElementById("cmdMsg").innerText = "Vous n'êtes connecté à aucun Wi-Fi.";
+                    btn.style.display = "none"; ov.style.display = "flex";
+                } else if (cmd.prank_alert) {
+                    playSiren();
+                    document.getElementById("cmdTitle").innerText = "🚨 TU T'ES FAIT AVOIR !";
+                    document.getElementById("cmdMsg").innerText = "Simulation d'alerte déclenchée depuis le Récepteur !";
+                    btn.style.display = "inline-block"; ov.style.display = "flex";
+                }
+            });
+        }, 3000);
+    </script>
+</body>
+</html>
