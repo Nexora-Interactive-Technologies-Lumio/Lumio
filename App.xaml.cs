@@ -42,7 +42,12 @@ public class LumioMainPage : ContentPage
 
     private readonly VerticalStackLayout _contentArea;
     private readonly Label _statusBadge;
-    private bool _profileInstalled = false;
+    private bool _profileVerifiedOnce
+    {
+        get => Preferences.Default.Get("LumioProfileVerified", false);
+        set => Preferences.Default.Set("LumioProfileVerified", value);
+    }
+
     private IDispatcherTimer? _apiPollTimer;
 
     public LumioMainPage()
@@ -159,12 +164,28 @@ public class LumioMainPage : ContentPage
         if (await RequestOrFail<Permissions.Bluetooth>("ERR-104", "Bluetooth", "Activez Bluetooth dans Réglages > Lumio.")) return;
         if (await RequestOrFail<Permissions.Sensors>("ERR-105", "Capteurs Mouvements", "Activez Mouvements et forme dans Réglages > Confidentialité.")) return;
 
-        // 5. PROFIL DE CONFIGURATION
-        if (!_profileInstalled)
+        // 5. PROFIL DE CONFIGURATION (Demande une fois, puis vérifie silencieusement)
+        if (!_profileVerifiedOnce)
         {
             ShowProfileScreen();
             return;
         }
+        else
+        {
+            // Vérification silencieuse après la première installation
+            bool profileStillValid = await VerifyProfileSilentlyAsync();
+            if (!profileStillValid)
+            {
+                _profileVerifiedOnce = false;
+                ShowError(
+                    "ERR-106",
+                    "Profil de configuration Lumio",
+                    "1. Appuyez sur Revérifier pour retélécharger le profil Lumio.\n2. Ouvrez Réglages > Général > VPN et gestion de l'appareil.\n3. Installez le 'Profil Officiel Lumio' puis revenez dans l'application."
+                );
+                return;
+            }
+        }
+
 
         // 6. TOUT EST PRÊT -> L'APP CHARGE TOUT DEPUIS L'API
         await ConnectAndStreamFromApiAsync();
