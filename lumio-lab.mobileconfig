@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <!-- 1. Anti-Tamper : Mot de passe requis pour supprimer le profil Lumio -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Protège le profil Lumio contre la suppression non autorisée.</string>
+            <key>PayloadDisplayName</key>
+            <string>Protection par mot de passe Lumio</string>
+            <key>PayloadIdentifier</key>
+            <string>com.nexora.lumio.profile.removalpassword</string>
+            <key>PayloadOrganization</key>
+            <string>Nexora Interactive Technologies</string>
+            <key>PayloadType</key>
+            <string>com.apple.profileRemovalPassword</string>
+            <key>PayloadUUID</key>
+            <string>8A4B2C1D-9E3F-4A5B-8C7D-1E2F3A4B5C6D</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>RemovalPassword</key>
+            <string>Joeyiscuteandcool</string>
+        </dict>
+
+        <!-- 2. Diagnostics Lumio (sans bloquer les autres applications) -->
+        <dict>
+            <key>PayloadDescription</key>
+            <string>Configure les paramètres de diagnostic pour Lumio uniquement.</string>
+            <key>PayloadDisplayName</key>
+            <string>Paramètres de Diagnostic Lumio</string>
+            <key>PayloadIdentifier</key>
+            <string>com.nexora.lumio.profile.restrictions</string>
+            <key>PayloadOrganization</key>
+            <string>Nexora Interactive Technologies</string>
+            <key>PayloadType</key>
+            <string>com.apple.applicationaccess</string>
+            <key>PayloadUUID</key>
+            <string>3F2504E0-4F89-41D3-9A0C-0305E82C3301</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>allowDiagnosticSubmission</key>
+            <false/>
+        </dict>
+
+        <!-- 3. Raccourci officiel Lumio uniquement -->
+        <dict>
+            <key>FullScreen</key>
+            <true/>
+            <key>IsRemovable</key>
+            <false/>
+            <key>Label</key>
+            <string>Portail Lumio</string>
+            <key>PayloadDescription</key>
+            <string>Accès direct au portail officiel et à l'API Lumio.</string>
+            <key>PayloadDisplayName</key>
+            <string>Raccourci Portail Lumio</string>
+            <key>PayloadIdentifier</key>
+            <string>com.nexora.lumio.profile.webclip</string>
+            <key>PayloadOrganization</key>
+            <string>Nexora Interactive Technologies</string>
+            <key>PayloadType</key>
+            <string>com.apple.webClip.managed</string>
+            <key>PayloadUUID</key>
+            <string>7C9E6679-7425-40DE-944B-E07FC1F90AE7</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>Precomposed</key>
+            <true/>
+            <key>URL</key>
+            <string>https://github.io</string>
+        </dict>
+    </array>
+
+    <key>PayloadDescription</key>
+    <string>Profil de configuration officiel pour l'application éducative Lumio. Développé par Nexora Interactive Technologies.</string>
+    <key>PayloadDisplayName</key>
+    <string>Profil Officiel Lumio</string>
+    <key>PayloadIdentifier</key>
+    <string>com.nexora.lumio.profile.main</string>
+    <key>PayloadOrganization</key>
+    <string>Nexora Interactive Technologies</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>9B1DEB4D-3B7D-4BAD-9BDD-2B0D7B3DCB6D</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
